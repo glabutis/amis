@@ -242,9 +242,20 @@ class SettingsPayload(BaseModel):
 # Routes — dashboard
 # ---------------------------------------------------------------------------
 
+BUILD_ID = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    return HTML
+    html = HTML.replace("{{BUILD_ID}}", BUILD_ID)
+    return HTMLResponse(
+        html,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.websocket("/ws")
@@ -632,7 +643,7 @@ HTML = """<!DOCTYPE html>
 <header>
   <div>
     <h1>AMIS</h1>
-    <p>Automatic Media Ingestion Server</p>
+    <p>Automatic Media Ingestion Server · build {{BUILD_ID}}</p>
   </div>
   <div class="header-right">
     <div id="conn-pill" class="dead">● Connecting…</div>
@@ -1036,24 +1047,38 @@ async function saveSettings() {
 }
 
 // ── Init: wire up events once DOM is ready ────────────────────────────────
+function wire(id, event, handler) {
+  try {
+    const el = $(id);
+    if (!el) { console.warn('AMIS init: element missing #' + id); return; }
+    el.addEventListener(event, handler);
+    console.log('AMIS init: wired #' + id + ' ' + event);
+  } catch (err) {
+    console.error('AMIS init: failed to wire #' + id, err);
+  }
+}
+
 function init() {
-  // Settings buttons
-  $('settings-btn').addEventListener('click', openDrawer);
-  $('drawer-overlay').addEventListener('click', closeDrawer);
-  $('drawer-close').addEventListener('click', closeDrawer);
-  $('smb-chip').addEventListener('click', openDrawer);
-  $('smb-chip').addEventListener('keydown', e => {
+  console.log('AMIS init starting, build: {{BUILD_ID}}');
+
+  wire('settings-btn',   'click',   openDrawer);
+  wire('drawer-overlay', 'click',   closeDrawer);
+  wire('drawer-close',   'click',   closeDrawer);
+  wire('smb-chip',       'click',   openDrawer);
+  wire('smb-chip',       'keydown', e => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(); }
   });
-  $('pw-toggle').addEventListener('click', togglePw);
-  $('btn-test').addEventListener('click', testSmb);
-  $('btn-save').addEventListener('click', saveSettings);
+  wire('pw-toggle', 'click', togglePw);
+  wire('btn-test',  'click', testSmb);
+  wire('btn-save',  'click', saveSettings);
 
-  // Escape to close drawer
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+  try {
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+  } catch (err) { console.error('AMIS init: escape handler failed', err); }
 
-  // Kick off WebSocket
-  connect();
+  try { connect(); } catch (err) { console.error('AMIS init: connect() failed', err); }
+
+  console.log('AMIS init complete');
 }
 
 if (document.readyState === 'loading') {
