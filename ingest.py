@@ -244,16 +244,15 @@ def next_backup_folder(smb_mount: str) -> str:
     prefix = f"{today}_Backup_"
     smb_root = Path(smb_mount)
 
-    existing = sorted(
-        [d.name for d in smb_root.iterdir() if d.is_dir() and d.name.startswith(prefix)]
-    )
+    # Collect only folders with a parseable numeric suffix
+    numbers = []
+    for d in smb_root.iterdir():
+        if d.is_dir() and d.name.startswith(prefix):
+            suffix = d.name[len(prefix):]
+            if suffix.isdigit():
+                numbers.append(int(suffix))
 
-    if existing:
-        last_num = int(existing[-1].split("_")[-1])
-        next_num = last_num + 1
-    else:
-        next_num = 1
-
+    next_num = max(numbers) + 1 if numbers else 1
     return f"{prefix}{next_num:03d}"
 
 

@@ -10,6 +10,7 @@ import json
 import sqlite3
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import uvicorn
@@ -49,7 +50,10 @@ app = FastAPI(title="AMIS")
 # ---------------------------------------------------------------------------
 
 def read_status() -> dict:
-    path = Path(CONFIG["paths"]["status_file"])
+    status_file = CONFIG.get("paths", {}).get("status_file")
+    if not status_file:
+        return {"state": "idle", "updated_at": None}
+    path = Path(status_file)
     if not path.exists():
         return {"state": "idle", "updated_at": None}
     try:
@@ -59,7 +63,10 @@ def read_status() -> dict:
 
 
 def read_log_tail(n: int) -> list[str]:
-    log_path = Path(CONFIG["paths"]["log_file"])
+    log_file = CONFIG.get("paths", {}).get("log_file")
+    if not log_file:
+        return []
+    log_path = Path(log_file)
     if not log_path.exists():
         return []
     try:
@@ -70,7 +77,10 @@ def read_log_tail(n: int) -> list[str]:
 
 
 def read_history(limit: int) -> list[dict]:
-    db_path = Path(CONFIG["paths"]["db_file"])
+    db_file = CONFIG.get("paths", {}).get("db_file")
+    if not db_file:
+        return []
+    db_path = Path(db_file)
     if not db_path.exists():
         return []
     try:
@@ -157,9 +167,53 @@ async def broadcaster():
             last_snapshot = snap
 
 
+async def auto_test_smb_on_startup():
+    """If SMB credentials are configured, run a test in the background."""
+    global SMB_STATUS
+    smb = CONFIG.get("smb", {})
+    host = smb.get("host", "").strip()
+    username = smb.get("username", "").strip()
+    password = smb.get("password", "")
+
+    if not host or not username or not password:
+        return
+    if host.startswith("//192.168.1.100"):  # placeholder host
+        return
+
+    with tempfile.TemporaryDirectory() as tmp_mount:
+        try:
+            result = subprocess.run(
+                [
+                    "mount", "-t", "cifs",
+                    host, tmp_mount,
+                    "-o", f"username={username},password={password},vers=3.0",
+                ],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode == 0:
+                subprocess.run(["umount", tmp_mount], capture_output=True)
+                SMB_STATUS = {
+                    "state": "ok",
+                    "message": f"Connected to {host}",
+                    "tested_at": datetime.now().isoformat(),
+                }
+            else:
+                err = result.stderr.strip() or "Unknown error"
+                SMB_STATUS = {
+                    "state": "fail",
+                    "message": err.replace(password, "***"),
+                    "tested_at": datetime.now().isoformat(),
+                }
+        except subprocess.TimeoutExpired:
+            SMB_STATUS = {"state": "fail", "message": "Connection timed out", "tested_at": datetime.now().isoformat()}
+        except Exception as e:
+            SMB_STATUS = {"state": "fail", "message": str(e), "tested_at": datetime.now().isoformat()}
+
+
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(broadcaster())
+    asyncio.create_task(auto_test_smb_on_startup())
 
 
 # ---------------------------------------------------------------------------
@@ -241,13 +295,15 @@ async def api_save_config(payload: SettingsPayload):
     global CONFIG
 
     # Reload fresh copy so we don't clobber fields we don't own
-    cfg = load_config(CONFIG_PATH)
+    cfg = load_config(CONFIG_PATH) or {}
+    cfg.setdefault("smb", {})
+    cfg.setdefault("output", {})
 
     cfg["smb"]["host"]        = payload.smb.host.strip()
     cfg["smb"]["username"]    = payload.smb.username.strip()
     cfg["smb"]["mount_point"] = payload.smb.mount_point.strip()
 
-    # Only update password if the user typed a new one
+    # Only update password if the user typed a new one (not the masked placeholder)
     if payload.smb.password and not set(payload.smb.password).issubset({"•", "*"}):
         cfg["smb"]["password"] = payload.smb.password
 
@@ -269,8 +325,6 @@ async def api_test_smb(payload: SmbSettings):
     Updates SMB_STATUS and broadcasts to all connected clients.
     """
     global SMB_STATUS
-
-    from datetime import datetime
 
     host        = payload.host.strip()
     username    = payload.username.strip()
@@ -582,7 +636,7 @@ HTML = """<!DOCTYPE html>
   </div>
   <div class="header-right">
     <div id="conn-pill" class="dead">● Connecting…</div>
-    <button id="settings-btn" onclick="openDrawer()" title="Settings">⚙</button>
+    <button id="settings-btn" type="button" title="Settings">⚙</button>
   </div>
 </header>
 
@@ -596,7 +650,7 @@ HTML = """<!DOCTYPE html>
       <div class="stat-chip"><span class="label">Card</span><span class="value" id="stat-card">—</span></div>
       <div class="stat-chip"><span class="label">Backup</span><span class="value" id="stat-backup">—</span></div>
       <div class="stat-chip"><span class="label">Progress</span><span class="value" id="stat-progress">—</span></div>
-      <div id="smb-chip" class="smb-chip untested" title="" onclick="openDrawer()">
+      <div id="smb-chip" class="smb-chip untested" title="" role="button" tabindex="0">
         <span id="smb-chip-dot">●</span> SMB <span id="smb-chip-label">Untested</span>
       </div>
     </div>
@@ -640,11 +694,11 @@ HTML = """<!DOCTYPE html>
 </main>
 
 <!-- Settings drawer -->
-<div id="drawer-overlay" onclick="closeDrawer()"></div>
+<div id="drawer-overlay"></div>
 <div id="drawer">
   <div class="drawer-header">
     <h2>SETTINGS</h2>
-    <button id="drawer-close" onclick="closeDrawer()">✕</button>
+    <button id="drawer-close" type="button">✕</button>
   </div>
   <div class="drawer-body">
 
@@ -667,7 +721,7 @@ HTML = """<!DOCTYPE html>
           <label>Password</label>
           <div class="pw-wrap">
             <input id="smb-pass" type="password" autocomplete="new-password" placeholder="unchanged">
-            <button class="pw-toggle" onclick="togglePw()" title="Show/hide">👁</button>
+            <button id="pw-toggle" class="pw-toggle" type="button" title="Show/hide">👁</button>
           </div>
         </div>
       </div>
@@ -719,13 +773,14 @@ HTML = """<!DOCTYPE html>
   </div><!-- /drawer-body -->
 
   <div class="drawer-footer">
-    <button class="btn btn-test" id="btn-test" onclick="testSmb()">Test Connection</button>
+    <button class="btn btn-test" id="btn-test" type="button">Test Connection</button>
     <span id="test-result"></span>
-    <button class="btn btn-save" id="btn-save" onclick="saveSettings()">Save</button>
+    <button class="btn btn-save" id="btn-save" type="button">Save</button>
   </div>
 </div>
 
 <script>
+'use strict';
 const $ = id => document.getElementById(id);
 
 // ── WebSocket ──────────────────────────────────────────────────────────────
@@ -733,18 +788,29 @@ let ws, reconnectDelay = 1000;
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  try {
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+  } catch (err) {
+    console.error('WebSocket construction failed:', err);
+    setTimeout(connect, 3000);
+    return;
+  }
   ws.onopen = () => {
     $('conn-pill').className = 'live';
     $('conn-pill').textContent = '● Live';
     reconnectDelay = 1000;
   };
   ws.onmessage = e => {
-    const snap = JSON.parse(e.data);
-    applyStatus(snap.status);
-    applySmbStatus(snap.smb_status);
-    applyLog(snap.log_lines);
-    applyHistory(snap.history);
+    // One bad message must not take down the whole handler
+    try {
+      const snap = JSON.parse(e.data);
+      if (snap.status)     applyStatus(snap.status);
+      if (snap.smb_status) applySmbStatus(snap.smb_status);
+      if (snap.log_lines)  applyLog(snap.log_lines);
+      if (snap.history)    applyHistory(snap.history);
+    } catch (err) {
+      console.error('Error handling WS message:', err);
+    }
   };
   ws.onclose = () => {
     $('conn-pill').className = 'dead';
@@ -752,8 +818,8 @@ function connect() {
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 10000);
   };
+  ws.onerror = err => console.error('WebSocket error:', err);
 }
-connect();
 
 // ── Status ─────────────────────────────────────────────────────────────────
 function applyStatus(s) {
@@ -873,7 +939,6 @@ function closeDrawer() {
   $('drawer-overlay').classList.remove('open');
   $('drawer').classList.remove('open');
 }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
 
 async function loadSettings() {
   const res = await fetch('/api/config');
@@ -968,6 +1033,33 @@ async function saveSettings() {
     btn.textContent = 'Error';
     btn.disabled = false;
   }
+}
+
+// ── Init: wire up events once DOM is ready ────────────────────────────────
+function init() {
+  // Settings buttons
+  $('settings-btn').addEventListener('click', openDrawer);
+  $('drawer-overlay').addEventListener('click', closeDrawer);
+  $('drawer-close').addEventListener('click', closeDrawer);
+  $('smb-chip').addEventListener('click', openDrawer);
+  $('smb-chip').addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(); }
+  });
+  $('pw-toggle').addEventListener('click', togglePw);
+  $('btn-test').addEventListener('click', testSmb);
+  $('btn-save').addEventListener('click', saveSettings);
+
+  // Escape to close drawer
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+  // Kick off WebSocket
+  connect();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
 }
 </script>
 </body>
