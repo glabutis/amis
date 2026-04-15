@@ -10,26 +10,33 @@ RULES_DEST="/etc/udev/rules.d/99-amis.rules"
 TRIGGER_DEST="/usr/local/bin/amis-trigger.sh"
 INGEST_DEST="/usr/local/bin/amis-ingest"
 WEB_DEST="/usr/local/bin/amis-web"
+VENV="/opt/amis/venv"
+PYTHON="$VENV/bin/python3"
 
 # ---------------------------------------------------------------------------
-echo "[1/6] Installing system dependencies..."
+echo "[1/7] Installing system dependencies..."
 # ---------------------------------------------------------------------------
 apt-get update -qq
 apt-get install -y \
     ffmpeg \
     python3 \
-    python3-pip \
+    python3-venv \
+    python3-full \
     cifs-utils \
     eject \
-    util-linux   # provides blkid, findmnt
+    util-linux
 
 # ---------------------------------------------------------------------------
-echo "[2/6] Installing Python dependencies..."
+echo "[2/7] Creating Python virtual environment at $VENV..."
 # ---------------------------------------------------------------------------
-pip3 install --quiet -r "$AMIS_DIR/requirements.txt"
+mkdir -p /opt/amis
+python3 -m venv "$VENV"
+"$PYTHON" -m pip install --quiet --upgrade pip
+"$PYTHON" -m pip install --quiet -r "$AMIS_DIR/requirements.txt"
+echo "  venv ready at $VENV"
 
 # ---------------------------------------------------------------------------
-echo "[3/6] Installing AMIS files..."
+echo "[3/7] Installing AMIS files..."
 # ---------------------------------------------------------------------------
 
 # Config
@@ -47,8 +54,8 @@ cp "$AMIS_DIR/ingest.py" "$INGEST_DEST"
 chmod +x "$INGEST_DEST"
 echo "  Ingest script installed to $INGEST_DEST"
 
-# Trigger script
-cp "$AMIS_DIR/amis-trigger.sh" "$TRIGGER_DEST"
+# Trigger script — bake in the venv python path
+sed "s|/usr/bin/python3|$PYTHON|g" "$AMIS_DIR/amis-trigger.sh" > "$TRIGGER_DEST"
 chmod +x "$TRIGGER_DEST"
 echo "  Trigger script installed to $TRIGGER_DEST"
 
@@ -58,7 +65,7 @@ chmod +x "$WEB_DEST"
 echo "  Web UI installed to $WEB_DEST"
 
 # ---------------------------------------------------------------------------
-echo "[4/6] Installing udev rules..."
+echo "[4/7] Installing udev rules..."
 # ---------------------------------------------------------------------------
 cp "$AMIS_DIR/99-amis.rules" "$RULES_DEST"
 udevadm control --reload-rules
@@ -75,9 +82,28 @@ mkdir -p /var/lib/amis
 echo "  Directories created"
 
 # ---------------------------------------------------------------------------
-echo "[6/7] Installing and enabling systemd service for web UI..."
+echo "[6/7] Installing and enabling systemd web service..."
 # ---------------------------------------------------------------------------
-cp "$AMIS_DIR/amis-web.service" /etc/systemd/system/amis-web.service
+
+# Write service file with the correct venv python path
+cat > /etc/systemd/system/amis-web.service <<EOF
+[Unit]
+Description=AMIS Web Dashboard
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$PYTHON $WEB_DEST --config $CONFIG_DEST
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
 systemctl enable amis-web
 systemctl restart amis-web
@@ -94,7 +120,7 @@ echo "  3. Plug in an SD card to test"
 echo "  4. Monitor logs: tail -f /var/log/amis/ingest.log"
 echo ""
 echo "  To test ingest manually:"
-echo "    sudo python3 $INGEST_DEST /dev/sdb1 --config $CONFIG_DEST"
+echo "    sudo $PYTHON $INGEST_DEST /dev/sdb1 --config $CONFIG_DEST"
 echo ""
 echo "  Web service status:"
 echo "    systemctl status amis-web"
