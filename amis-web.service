@@ -1,0 +1,16 @@
+[Unit]
+Description=AMIS Web Dashboard
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/amis-web --config /etc/amis/config.yaml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+# Run as root so it can read the status/log files (same as ingest)
+User=root
+
+[Install]
+WantedBy=multi-user.target

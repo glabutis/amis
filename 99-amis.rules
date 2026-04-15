@@ -1,0 +1,20 @@
+# /etc/udev/rules.d/99-amis.rules
+# Triggers AMIS ingest when an SD card partition is connected via USB card reader.
+#
+# Matches: USB-connected block devices with a filesystem (SD cards, CF cards).
+# Excludes: internal drives, USB hubs, etc.
+#
+# If you want to restrict to a specific card reader, find its vendor/product ID with:
+#   lsusb
+# Then add:  ATTRS{idVendor}=="XXXX", ATTRS{idProduct}=="YYYY",
+#
+# KERNEL=="sd[b-z][0-9]"  — matches sdb1, sdc1, etc. (skips sda = boot drive)
+# ID_BUS=="usb"            — only USB-attached devices
+# ID_FS_TYPE!=""           — partition must have a recognized filesystem (FAT32/exFAT)
+
+ACTION=="add", \
+KERNEL=="sd[b-z][0-9]", \
+SUBSYSTEM=="block", \
+ENV{ID_BUS}=="usb", \
+ENV{ID_FS_TYPE}!="", \
+RUN+="/usr/local/bin/amis-trigger.sh %k"

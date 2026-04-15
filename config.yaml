@@ -1,0 +1,49 @@
+smb:
+  # UNC path to your SMB share
+  host: "//192.168.1.100/media"
+  username: "your_username"
+  password: "your_password"
+  # Local mount point for the SMB share
+  mount_point: "/mnt/smb"
+
+output:
+  codec: "libx265"
+  resolution: "1920x1080"
+  # CRF: 18=visually lossless, 23=good quality, 28=smaller file
+  crf: 22
+  # preset: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+  preset: "medium"
+  # Output container
+  extension: ".mp4"
+
+paths:
+  # Where SD cards get mounted
+  sd_mount_point: "/mnt/sdcard"
+  # Log file location
+  log_file: "/var/log/amis/ingest.log"
+  # SQLite DB for tracking processed files
+  db_file: "/var/lib/amis/processed.db"
+  # Live status file read by the web UI (written atomically by ingest.py)
+  status_file: "/var/lib/amis/status.json"
+
+web:
+  # Port the dashboard runs on
+  port: 8080
+  # How many log lines to show in the UI
+  log_tail_lines: 50
+  # How many recent backup entries to show in history
+  history_limit: 20
+
+sony:
+  # Directories to scan on Sony SD cards (in order of preference)
+  media_paths:
+    - "PRIVATE/M4ROOT/CLIP"
+    - "DCIM"
+  # File extensions to ingest
+  extensions:
+    - ".MP4"
+    - ".mp4"
+    - ".MXF"
+    - ".mxf"
+    - ".MOV"
+    - ".mov"
